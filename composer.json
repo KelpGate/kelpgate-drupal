@@ -3,13 +3,13 @@
   "type": "drupal-module",
   "description": "Scans Drupal file uploads for malware with the Kelpgate API and rejects infected files.",
   "keywords": ["drupal", "security", "antivirus", "malware", "kelpgate"],
-  "homepage": "https://github.com/KelpGate/kelpgate-drupal",
+  "homepage": "https://kelpgate.cloud",
   "license": "GPL-2.0-or-later",
   "minimum-stability": "stable",
   "authors": [
     {
       "name": "JustBots Labs",
-      "homepage": "https://console.kelpgate.cloud"
+      "homepage": "https://kelpgate.cloud"
     }
   ],
   "support": {
