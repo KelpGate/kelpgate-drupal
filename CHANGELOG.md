@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.1.0
 
-The first public version. It has not been tagged as a release yet.
+The first public version.
 
 - Sends each uploaded file to the Kelpgate scanning service during Drupal file validation, and rejects infected files with a validation error.
 - A failure policy decides what happens when the scanner cannot give a verdict: `block` (the default) or `allow`.
