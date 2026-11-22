@@ -6,6 +6,7 @@ use Drupal\Core\Cache\CacheBackendInterface;
 use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Site\Settings;
 use Drupal\Core\State\StateInterface;
+use Drupal\Core\StringTranslation\TranslatableMarkup;
 use Drupal\file\FileInterface;
 use GuzzleHttp\ClientInterface;
 use Psr\Log\LoggerInterface;
@@ -19,6 +20,19 @@ class KelpgateScanner {
    * Fetch a new OAuth2 token when fewer than this many seconds of validity remain.
    */
   const REFRESH_AHEAD_SECONDS = 120;
+
+  /**
+   * How long a clean verdict is remembered, in seconds.
+   *
+   * Six hours: as long as Drupal keeps an unsaved form and a temporary upload by default, so the
+   * re-validation when the form is saved never sends the file again.
+   */
+  const CLEAN_VERDICT_TTL = 21600;
+
+  /**
+   * Cache ID prefix for a clean verdict; the content's SHA-256 follows.
+   */
+  const CLEAN_VERDICT_CID = 'kelpgate_clean_verdict_';
 
   /**
    * The HTTP client.
@@ -54,6 +68,13 @@ class KelpgateScanner {
    * @var \Drupal\Core\State\StateInterface|null
    */
   protected $state;
+
+  /**
+   * Scan results in this request, keyed by content SHA-256.
+   *
+   * @var array
+   */
+  protected $validationResults = [];
 
   /**
    * Constructs a KelpgateScanner service.
@@ -450,6 +471,68 @@ class KelpgateScanner {
         'signature' => 'SERVICE_UNREACHABLE',
       ];
     }
+  }
+
+  /**
+   * Scans a file for upload validation and returns the error to show, if any.
+   *
+   * Used by both validation entry points (the file validation event on Drupal 10.2 and later,
+   * hook_file_validate() on earlier versions), so both reject with the same message.
+   *
+   * @return \Drupal\Core\StringTranslation\TranslatableMarkup|null
+   *   The validation error, or NULL when the file is accepted or scanning is disabled.
+   */
+  public function validationError(FileInterface $file): ?TranslatableMarkup {
+    if (!$this->isEnabled()) {
+      return NULL;
+    }
+
+    // Drupal validates a file again whenever an entity that references it is validated
+    // (FileValidationConstraint): once more when the form holding a fresh upload is saved, and on
+    // every later edit. A permanent file was scanned when it was uploaded, and a clean verdict for
+    // the same content is remembered, so neither is sent to the service a second time.
+    if ($file->isPermanent()) {
+      return NULL;
+    }
+    $hash = $this->contentHash($file);
+    if ($hash !== NULL && isset($this->validationResults[$hash])) {
+      $result = $this->validationResults[$hash];
+    }
+    elseif ($hash !== NULL && $this->cache->get(self::CLEAN_VERDICT_CID . $hash)) {
+      return NULL;
+    }
+    else {
+      $result = $this->scanFile($file);
+      if ($hash !== NULL) {
+        // Within one request every outcome is reused. Across requests only a real CLEAN verdict
+        // is: a file accepted without a verdict (fail-open) is scanned again in a later request,
+        // such as the form save after an AJAX upload, which may then reach the service.
+        $this->validationResults[$hash] = $result;
+        if ($result['signature'] === 'CLEAN') {
+          $this->cache->set(self::CLEAN_VERDICT_CID . $hash, TRUE, time() + self::CLEAN_VERDICT_TTL);
+        }
+      }
+    }
+
+    if ($result['clean']) {
+      return NULL;
+    }
+
+    return new TranslatableMarkup('Security check failed: This file cannot be accepted (@signature).', [
+      '@signature' => self::formatThreatSignature($result['signature']),
+    ]);
+  }
+
+  /**
+   * Returns the SHA-256 of the file's content, or NULL if it cannot be read.
+   */
+  protected function contentHash(FileInterface $file): ?string {
+    $realPath = \Drupal::service('file_system')->realpath($file->getFileUri());
+    if (!$realPath || !is_readable($realPath)) {
+      return NULL;
+    }
+    $hash = hash_file('sha256', $realPath);
+    return $hash === FALSE ? NULL : $hash;
   }
 
   /**

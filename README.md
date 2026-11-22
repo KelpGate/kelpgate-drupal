@@ -6,8 +6,6 @@ Drupal module that scans uploaded files with the [Kelpgate](https://kelpgate.clo
 
 The module is open source under GPL-2.0-or-later. The Kelpgate scanning service is a commercial hosted product; using it requires a Kelpgate account.
 
-> **Drupal 11.** The module validates uploads through `hook_file_validate()`. Drupal 10.2 deprecated that hook and Drupal 11 no longer invokes it, so on Drupal 11 the module installs but does not scan uploads. Do not rely on it for Drupal 11 sites until support for file validation events is released.
-
 ## Contents
 
 - [Requirements](#requirements)
@@ -27,7 +25,7 @@ The module is open source under GPL-2.0-or-later. The Kelpgate scanning service 
 
 | Component | Version |
 |---|---|
-| Drupal | 9.5 or 10.x (see [Compatibility](#compatibility)) |
+| Drupal | 9.5, 10.x or 11.x (see [Compatibility](#compatibility)) |
 | PHP | 7.4 or later, as supported by the Drupal version |
 | Kelpgate | API client (client ID and secret) from the [Kelpgate Console](https://console.kelpgate.cloud) |
 
@@ -101,6 +99,14 @@ flowchart LR
 
 The module obtains an OAuth 2.0 access token, caches it and renews it before expiry, then streams the file to the scanning API over HTTPS. Validation covers file fields, Media Library and editor image uploads. Only an infected verdict rejects a file on its own; the failure policy governs uploads for which no verdict is available.
 
+On Drupal 10.2 and later the module scans in a subscriber to the file validation event (`FileValidationEvent`); on Drupal 9.5 to 10.1 it uses `hook_file_validate()`. Drupal 10.2 and later 10.x releases still invoke the deprecated hook as well, so there the hook does nothing.
+
+Each upload is sent to the service once. Drupal validates a file again when the form that holds it is saved, and whenever an entity that references it is validated; the module does not scan again then:
+
+- A file that is already saved permanently is not scanned again, for example when content with an attachment is edited.
+- A clean verdict is remembered for six hours by the file's SHA-256, as long as Drupal keeps an unsaved form and a temporary upload. An identical file uploaded again within that time is not sent again.
+- A file accepted without a verdict (`fail_action: allow` during an outage) is scanned again when the form is saved, so it still gets a verdict if the service is back.
+
 ## Failure policy
 
 | Condition | `block` (default) | `allow` |
@@ -138,21 +144,21 @@ The upload is rejected and an entry appears under **Reports > Recent log message
 | Symptom | Cause |
 |---|---|
 | Every upload is rejected | The scanner is unreachable or the credentials are invalid while `fail_action` is `block`. Check the `kelpgate` log entries. |
-| No upload is ever blocked | Scanning is disabled, the module is not configured, `fail_action` is `allow` during an outage, or the site runs Drupal 11. |
+| No upload is ever blocked | Scanning is disabled, the module is not configured, or `fail_action` is `allow` during an outage. |
 | Authentication errors after changing the secret | Clear caches to discard the cached token, and confirm which source holds the secret. |
 | Log reports that the API URL must use HTTPS | The API or token URL is not HTTPS. |
 
 ## Compatibility
 
-| Drupal | PHP | Status |
-|---|---|---|
-| 9.5 | 8.0, 8.1 | Verified: clean file accepted, EICAR rejected, both failure policies |
-| 10.1 | 8.1 | Verified |
-| 10.3 | 8.2 | Verified; `hook_file_validate()` is deprecated from 10.2 |
-| 10.6 | 8.3 | Verified; `hook_file_validate()` is deprecated from 10.2 |
-| 11.x | 8.3, 8.4 | Not supported: Drupal 11 does not invoke `hook_file_validate()` |
+| Drupal | PHP | Validation entry point | Status |
+|---|---|---|---|
+| 9.5 (9.5.11) | 8.1 | `hook_file_validate()` | Verified |
+| 10.1 (10.1.8) | 8.2 | `hook_file_validate()` | Verified |
+| 10.3 (10.3.14) | 8.2 | File validation event; hook skipped | Verified |
+| 10.6 (10.6.22) | 8.4 | File validation event; hook skipped | Verified |
+| 11.4 (11.4.13) | 8.5 | File validation event | Verified |
 
-Verification used a simulated scanning API. All source files lint on PHP 7.4 through 8.4. Combinations not listed have not been tested.
+Each version was verified on a fresh site (official `drupal` Docker image, standard profile) against a simulated scanning API, by uploading through a file field on the article form, both as a full form submit and as an AJAX upload followed by save. On each: a clean file is accepted, the EICAR file is rejected with either failure policy, a scanner error rejects the upload with `block` and accepts it with `allow`, each upload is sent to the API once, and re-saving existing content sends nothing. All source files lint on PHP 7.4 through 8.4. Other Drupal 11 minor versions and combinations not listed have not been tested.
 
 ## Versioning and support
 
